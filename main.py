@@ -2,19 +2,22 @@ import taichi as ti
 ti.init(arch=ti.vulkan)  # Alternatively, ti.init(arch=ti.cpu)
 
 #Set physics parameters
+to_generate = False
+to_reset = False
+
 n = 128
 quad_size = 1.0 / n
 dt = 4e-2 / n
-substeps = int(1 / 240 // dt)
+substeps = int(1 / 60 // dt)
 
 gravity = ti.Vector([0, -9.8, 0])
 spring_Y = ti.field(ti.f32, shape=())
 spring_Y[None] = 1e3
-dashpot_damping = ti.field(ti.f32, shape=())
-dashpot_damping[None] = 1e4
+dashpot_damping = 1e4
 drag_damping = 1
 
-ball_radius = 0.3
+ball_radius= ti.field(ti.f32, shape=())
+ball_radius[None] = 0.3
 ball_center = ti.Vector.field(3, dtype=float, shape=(1, ))
 ball_center[0] = [0, 0, 0]
 
@@ -27,6 +30,11 @@ vertices = ti.Vector.field(3, dtype=float, shape=n * n)
 colors = ti.Vector.field(3, dtype=float, shape=n * n)
 
 bending_springs = False
+
+def reset():
+    substeps = int(1 / 60 // dt)
+    spring_Y[None] = 1e3
+    ball_radius[None] = 0.3
 
 @ti.kernel
 def initialize_mass_points():
@@ -92,14 +100,14 @@ def substep():
                 # Spring force
                 force += -spring_Y[None] * d * (current_dist / original_dist - 1)
                 # Dashpot damping
-                force += -v_ij.dot(d) * d * dashpot_damping[None] * quad_size
+                force += -v_ij.dot(d) * d * dashpot_damping * quad_size
 
         v[i] += force * dt
 
     for i in ti.grouped(x):
         v[i] *= ti.exp(-drag_damping * dt)
         offset_to_center = x[i] - ball_center[0]
-        if offset_to_center.norm() <= ball_radius:
+        if offset_to_center.norm() <= ball_radius[None]:
             # Velocity projection
             normal = offset_to_center.normalized()
             v[i] -= min(v[i].dot(normal), 0) * normal
@@ -111,7 +119,7 @@ def update_vertices():
         vertices[i * n + j] = x[i, j]
 
 #Set ui parameters
-window = ti.ui.Window("Taichi Cloth Simulation on GGUI", (512, 512),
+window = ti.ui.Window("Taichi Cloth Simulation on GGUI", (768, 768),
                       vsync=True)
 canvas = window.get_canvas()
 canvas.set_background_color((0.6, 0.5, 0.4))
@@ -123,13 +131,25 @@ scene.set_camera(camera)
 gui = window.get_gui()
 
 while window.running:
-    with gui.sub_window("Parameters", x=0, y=0, width=0.5, height=0.5):
-        spring_Y[None] = gui.slider_float("spring_Y", spring_Y[None], minimum=1e3, maximum=3e4)
-        dashpot_damping[None] = gui.slider_float("dashpot_damping", dashpot_damping[None], minimum=1e3, maximum=6e4)
+    with gui.sub_window("Parameters", x=0, y=0, width=0.4, height=0.4):
+        spring_Y[None] = gui.slider_float("spring_Y", spring_Y[None], minimum=1e2, maximum=3e4)
+        substeps = gui.slider_int("substeps", substeps, minimum=10, maximum=100)
+        ball_radius[None] = gui.slider_float("ball_radius", ball_radius[None], minimum=0.1, maximum=0.5)
+        to_reset = gui.button("Reset")
+        to_generate = gui.button("Generate")
+
+    if to_generate:
+        initialize_mass_points()
+        is_ready = False
     
+    if to_reset:
+        reset()
+        to_reset = False
+    '''
     if window.get_event(ti.ui.PRESS):
         if window.is_pressed(ti.ui.RMB):
             initialize_mass_points()
+    '''
 
     for i in range(substeps):
         substep()
@@ -143,7 +163,7 @@ while window.running:
     scene.ambient_light((0.5, 0.5, 0.5))
 
     # Draw a smaller ball to avoid visual penetration
-    scene.particles(ball_center, radius=ball_radius * 0.95, color=(0.4, 0.5, 0.6))
+    scene.particles(ball_center, radius=ball_radius[None] * 0.95, color=(0.4, 0.5, 0.6))
 
     canvas.scene(scene)
     window.show()
